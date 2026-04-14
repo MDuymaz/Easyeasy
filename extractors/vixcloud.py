@@ -51,6 +51,14 @@ class VixCloudExtractor:
                 "Use a fresh embed URL or the upstream page that generated it."
             )
 
+    @staticmethod
+    def _has_embed_auth_params(url: str) -> bool:
+        parsed = urlparse(url)
+        if "/embed/" not in parsed.path:
+            return True
+        query = parse_qs(parsed.query)
+        return bool(query.get("token", [None])[0] and query.get("expires", [None])[0])
+
     def _build_request_headers(self, url: str, request_headers: dict | None = None) -> dict:
         headers = dict(self.base_headers)
         source_headers = request_headers or self.request_headers or {}
@@ -314,6 +322,16 @@ class VixCloudExtractor:
 
         async with session.get(url, headers=headers) as response:
             html = await response.text()
+
+        if (
+            "/embed/" in url
+            and response.status == 403
+            and not self._has_embed_auth_params(url)
+        ):
+            raise ExtractorError(
+                "VixCloud embed URL requires token/expires parameters. "
+                "Use a full embed URL or the upstream page that generated it."
+            )
 
         components = None
         if response.status != 403:
