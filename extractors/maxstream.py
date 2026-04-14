@@ -1,12 +1,34 @@
-import logging
 import random
 import re
+import socket
 from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
+from aiohttp.resolver import DefaultResolver
 from aiohttp_socks import ProxyConnector
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+class StaticResolver(DefaultResolver):
+    """Custom resolver to force specific IPs for domains (bypass hijacking)."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mapping = {}
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        if host in self.mapping:
+            ip = self.mapping[host]
+            logger.debug(f"StaticResolver: forcing {host} -> {ip}")
+            # Format required by aiohttp: list of dicts
+            return [{
+                'hostname': host,
+                'host': ip,
+                'port': port,
+                'family': family,
+                'proto': 0,
+                'flags': 0
+            }]
+        return await super().resolve(host, port, family)
 
 class ExtractorError(Exception):
     pass
@@ -22,14 +44,15 @@ class MaxstreamExtractor:
         self.session = None
         self.mediaflow_endpoint = "hls_proxy"
         self.proxies = proxies or []
+        self.resolver = StaticResolver()
 
     def _get_random_proxy(self):
         return random.choice(self.proxies) if self.proxies else None
 
     async def _get_session(self, proxy=None):
         """Get or create session, optionally with a specific proxy."""
-        # If we need a specific proxy, we should probably create a temporary session
-        # or use a cached one. For simplicity, we create a specialized one if proxy changes.
+        # Note: we use our custom resolver only for non-proxy requests
+        # because proxies handle their own DNS resolution.
         
         timeout = ClientTimeout(total=45, connect=15, sock_read=30)
         if proxy:
@@ -37,7 +60,13 @@ class MaxstreamExtractor:
             return ClientSession(timeout=timeout, connector=connector, headers={'User-Agent': self.base_headers["user-agent"]})
         
         if self.session is None or self.session.closed:
-            connector = TCPConnector(limit=0, limit_per_host=0, keepalive_timeout=60, enable_cleanup_closed=True, force_close=False, use_dns_cache=True)
+            connector = TCPConnector(
+                limit=0, 
+                limit_per_host=0, 
+                keepalive_timeout=60, 
+                enable_cleanup_closed=True, 
+                resolver=self.resolver # Use custom StaticResolver
+            )
             self.session = ClientSession(timeout=timeout, connector=connector, headers={'User-Agent': self.base_headers["user-agent"]})
         return self.session
 
@@ -59,14 +88,18 @@ class MaxstreamExtractor:
         return []
 
     async def _smart_request(self, url: str, method="GET", **kwargs):
-        """Request with automatic retry using different proxies and DoH fallback on connection failure."""
+        """Request with automatic retry using different proxies and resolver fallback on connection failure."""
         last_error = None
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
         
-        # Determine paths to try: Direct, Proxies, and then DoH for each
+        # Clear previous mapping for this domain to start fresh if needed
+        if domain in self.resolver.mapping:
+            del self.resolver.mapping[domain]
+
+        # Determine paths to try: Direct, Proxies, and then resolver override
         paths = []
-        # Path 1: Direct
+        # Path 1: Direct (system DNS)
         paths.append({"proxy": None, "use_ip": None})
         
         # Path 2: Proxies (if any)
@@ -74,7 +107,7 @@ class MaxstreamExtractor:
             for p in self.proxies:
                 paths.append({"proxy": p, "use_ip": None})
         
-        # Path 3: DoH fallback (direct to IP) if it's uprot or maxstream
+        # Path 3: DoH fallback (override resolver) if it's uprot or maxstream
         if "uprot.net" in domain or "maxstream" in domain:
             real_ips = await self._resolve_doh(domain)
             for ip in real_ips[:2]: # Try first 2 IPs
@@ -84,31 +117,25 @@ class MaxstreamExtractor:
             proxy = path["proxy"]
             use_ip = path["use_ip"]
             
-            request_url = url
-            headers = kwargs.get("headers", {}).copy()
-            
+            # Reset resolver mapping for this attempt
             if use_ip:
-                # Replace domain with IP in URL
-                request_url = url.replace(domain, use_ip)
-                # Keep Host header for SNI and HTTP virtual hosting
-                headers["Host"] = domain
-                logger.info(f"Attempting DoH connection to {domain} via IP {use_ip}")
+                self.resolver.mapping[domain] = use_ip
+            else:
+                self.resolver.mapping.pop(domain, None)
 
             session = await self._get_session(proxy=proxy)
             try:
-                # Disable SSL verification when connecting via IP to avoid certificate mismatch 
-                # (though Host header should fix it, sometimes it's tricky with common libs)
-                ssl_ctx = False if use_ip else None
-                
-                async with session.request(method, request_url, headers=headers, ssl=ssl_ctx, **kwargs) as response:
+                # IMPORTANT: Use the original URL even with StaticResolver,
+                # so aiohttp sends the correct SNI and Host header automatically!
+                async with session.request(method, url, **kwargs) as response:
                     if response.status < 400:
                         text = await response.text()
                         if proxy: await session.close()
                         return text
                     else:
-                        logger.warning(f"Request to {url} failed (Status {response.status}) [Proxy: {proxy}, IP: {use_ip}]")
+                        logger.warning(f"Request to {url} failed (Status {response.status}) [Proxy: {proxy}, StaticIP: {use_ip}]")
             except Exception as e:
-                logger.warning(f"Request to {url} failed (Error: {e}) [Proxy: {proxy}, IP: {use_ip}]")
+                logger.warning(f"Request to {url} failed (Error: {e}) [Proxy: {proxy}, StaticIP: {use_ip}]")
                 last_error = e
             finally:
                 if proxy and 'session' in locals() and not session.closed:
