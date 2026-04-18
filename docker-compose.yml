@@ -1,12 +1,9 @@
 services:  
   easyproxy:
-    build: https://github.com/realbestia1/EasyProxy.git#main
+    image: ghcr.io/realbestia1/easyproxy:full
     container_name: easyproxy
     restart: unless-stopped
-    shm_size: "1gb"
-    depends_on:
-      - flaresolverr
-      - byparr
+    shm_size: "2gb"
     ports:
       - '${PORT:-7860}:${PORT:-7860}' #modifica la variabile "PORT" per cambiare la porta
     environment:
@@ -15,28 +12,3 @@ services:
       - FLARESOLVERR_URL=http://flaresolverr:8191
       - FLARESOLVERR_TIMEOUT=30
       - BYPARR_URL=http://byparr:8192
-
-  flaresolverr:
-    # DockerHub mirror flaresolverr/flaresolverr:latest
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: flaresolverr
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - LOG_FILE=${LOG_FILE:-none}
-      - LOG_HTML=${LOG_HTML:-false}
-      - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
-      - TZ=Europe/London
-    ports:
-      - "8191:8191"
-    volumes:
-      - /var/lib/flaresolver:/config
-    restart: unless-stopped
-
-  byparr:
-    image: ghcr.io/thephaseless/byparr:latest
-    container_name: byparr
-    environment:
-      - PORT=8192
-    ports:
-      - "8192:8192"
-    restart: unless-stopped
