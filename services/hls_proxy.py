@@ -528,8 +528,8 @@ class HLSProxy:
         # Patterns for domains that usually block Cloudflare/WARP
         # Cinemacity, VixSrc, etc.
         bypass_patterns = [
-            "vavoo.to", "vcdn.io", "host-cdn.net", "ngolpdkyoctjcddxshli469r.org",
-            "citysync.club", "cccdn.net", "cinemacity.cc", "vixsrc.to", "vixcloud.co",
+            "vavoo.to", "vcdn.io", "ngolpdkyoctjcddxshli469r.org",
+            "citysync.club", "cccdn.net", "cinemacity.cc",
             "lokke.app", "mediahubmx", "vavoo.tv"
         ]
         
@@ -2321,8 +2321,7 @@ class HLSProxy:
                         self.url, self.headers, self.proxy = url, headers, proxy
                         self.session = None
                     async def __aenter__(self):
-                        # Force HTTP/1.1 to avoid 502 errors with fragile CDNs
-                        self.session = CurlAsyncSession(impersonate="chrome120", http_version="1.1")
+                        self.session = CurlAsyncSession(impersonate="chrome120")
                         await self.session.__aenter__()
                         c_resp = await self.session.get(self.url, headers=self.headers, proxy=self.proxy, timeout=30)
                         
