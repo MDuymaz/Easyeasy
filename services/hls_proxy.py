@@ -1366,6 +1366,7 @@ class HLSProxy:
                     target_url,
                     force_refresh=force_refresh,
                     request_headers=combined_headers,
+                    bypass_warp=bypass_warp
                 )
                 stream_url = result["destination_url"]
                 stream_headers = result.get("request_headers", {})
@@ -1729,7 +1730,8 @@ class HLSProxy:
                         },
                     )
 
-            return await self._proxy_stream(request, stream_url, stream_headers)
+            # Procedi con il proxy dello stream (passando l'eventuale bypass_warp attivato dall'estrattore)
+            return await self._proxy_stream(request, stream_url, stream_headers, bypass_warp=bypass_warp)
 
         except Exception as e:
             # ✅ MIGLIORATO: Distingui tra errori temporanei (sito offline) ed errori critici
@@ -2458,8 +2460,10 @@ class HLSProxy:
             logger.error(f"Error in segment proxy: {str(e)}")
             return web.Response(text=f"Segment error: {str(e)}", status=500)
 
-    async def _proxy_stream(self, request, stream_url, stream_headers):
+    async def _proxy_stream(self, request, stream_url, stream_headers, bypass_warp=None):
         """Effettua il proxy dello stream con gestione manifest e AES-128"""
+        if bypass_warp is None:
+            bypass_warp = request.query.get("warp", "").lower() == "off"
         try:
             # Ping DLStreams extractor to keep browser alive during playback
             # Use robust markers: Daddy's domains, 'premium' pattern, 'mono.css', or Referer/Origin headers
