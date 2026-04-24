@@ -245,7 +245,11 @@ class DeltabitExtractor:
                     img_data = base64.b64decode(img_data_b64)
                     
                     res_captcha = ocr.classification(img_data)
-                    logger.debug(f"Deltabit: OCR Result: {res_captcha}")
+                    # Sanitizzazione per captcha solo numerici
+                    res_captcha = res_captcha.replace('o', '0').replace('O', '0').replace('l', '1').replace('I', '1')
+                    res_captcha = re.sub(r'[^0-9]', '', res_captcha)
+                    
+                    logger.debug(f"Deltabit: OCR Result (sanitized): {res_captcha}")
                     
                     post_data = urlencode({"captch5": res_captcha, "submit": "Continue"})
                     post_res = await self._request_flaresolverr("request.post", current_url, post_data, session_id=session_id)
